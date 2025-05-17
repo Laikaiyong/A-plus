@@ -1,88 +1,79 @@
 // src/app/api/gen/text/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
+
+function stripWavHeader(buffer: Buffer): Buffer {
+  return buffer.subarray(44);
+}
 
 export async function POST(req: NextRequest) {
-  // Read audio as binary
-  const arrayBuffer = await req.arrayBuffer();
-  const audioBuffer = Buffer.from(arrayBuffer);
-
-  // Use correct STT params
-  const params = {
-    AccessKeyId: process.env.WK_ALI_ACCESS_KEY!,
-    Action: 'RecognizeSpeech',
-    Version: '2019-02-28',
-    Format: 'JSON',
-    Timestamp: new Date().toISOString(),
-    SignatureMethod: 'HMAC-SHA1',
-    SignatureVersion: '1.0',
-    SignatureNonce: Date.now().toString(),
-    // Add other required params for STT
-  };
-
-  const sortedKeys = Object.keys(params).sort();
-  const encode = (str: string) =>
-    encodeURIComponent(str)
-      .replace(/\+/g, '%20')
-      .replace(/\*/g, '%2A')
-      .replace(/%7E/g, '~');
-
-  const canonicalQuery = sortedKeys
-    .map((k) => `${encode(k)}=${encode(params[k as keyof typeof params])}`)
-    .join('&');
-
-  const stringToSign = `POST&%2F&${encode(canonicalQuery)}`;
-
-  const signature = crypto
-    .createHmac('sha1', process.env.WK_ALI_ACCESS_SECRET! + '&')
-    .update(stringToSign)
-    .digest('base64');
-
-  const queryString = new URLSearchParams({ ...params, Signature: signature }).toString();
-  const url = `http://nls-gateway-ap-southeast-1.aliyuncs.com/stream/v1/asr?${queryString}`;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-
   try {
-    const res = await fetch(url, {
+    // 1. Get token from Alibaba
+    const tokenRes = await fetch('https://nls-meta.ap-southeast-1.aliyuncs.com/pop/2018-05-18/tokens', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'audio/wav', // Alibaba expects PCM, not webm!
-      },
-      body: audioBuffer,
-      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        AccessKeyId: process.env.WK_ALI_ACCESS_KEY,
+        AccessKeySecret: process.env.WK_ALI_ACCESS_SECRET,
+      }),
     });
+    const tokenData = await tokenRes.json();
+    const token = tokenData?.Token?.Id;
+    if (!token) {
+      return NextResponse.json({ error: 'Failed to get token', data: tokenData }, { status: 500 });
+    }
 
-    let data;
+    // 2. Read and strip WAV header
+    const arrayBuffer = await req.arrayBuffer();
+    const wavBuffer = Buffer.from(arrayBuffer);
+    const pcmBuffer = stripWavHeader(wavBuffer);
+
+    // 3. Call ASR API with all required headers
+    const appkey = process.env.WK_ALI_APP_KEY!;
+    const url = `https://nls-gateway-ap-southeast-1.aliyuncs.com/stream/v1/asr?appkey=${appkey}&format=pcm&sample_rate=16000`;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     try {
-      data = await res.json();
-    } catch {
-      const text = await res.text();
-      data = { message: typeof text === 'string' ? text : String(text) };
-    }
-    let safeData;
-    try {
-      safeData = JSON.parse(JSON.stringify(data));
-    } catch {
-      safeData = { error: 'Response not serializable', raw: String(data) };
-    }
-    if (!res.ok) {
-      return NextResponse.json(
-        {
-          error: 'API error',
-          status: res.status,
-          data: safeData
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'X-NLS-Token': token,
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': pcmBuffer.length.toString(),
+          'Host': 'nls-gateway-ap-southeast-1.aliyuncs.com',
         },
-        { status: 500 }
-      );
+        body: pcmBuffer,
+        signal: controller.signal,
+      });
+
+      let data;
+      let rawText = '';
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        rawText = await res.text();
+        data = { error: rawText };
+      }
+      if (!res.ok) {
+        return NextResponse.json(
+          { error: 'API error', status: res.status, data },
+          { status: 500 }
+        );
+      }
+      if (data && data.error) {
+        console.error('Alibaba XML error:', data.error);
+      }
+      return NextResponse.json(data);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return NextResponse.json({ error: message }, { status: 500 });
+    } finally {
+      clearTimeout(timeout);
     }
-    return NextResponse.json(safeData);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: message }, { status: 500 });
-  } finally {
-    clearTimeout(timeout);
   }
 }

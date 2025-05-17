@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     .digest('base64');
 
   const queryString = new URLSearchParams({ ...params, Signature: signature }).toString();
-  const url = `https://nls-meta.cn-shanghai.aliyuncs.com/?${queryString}`;
+  const url = `http://nls-gateway-ap-southeast-1.aliyuncs.com/stream/v1/asr?${queryString}`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);

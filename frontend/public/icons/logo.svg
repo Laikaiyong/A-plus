@@ -1,0 +1,25 @@
+<svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+  <!-- Define the gradient and shadow -->
+  <defs>
+    <linearGradient id="orangeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316" /> <!-- orange-500 -->
+      <stop offset="100%" stop-color="#ea580c" /> <!-- orange-600 -->
+    </linearGradient>
+    
+    <!-- Shadow filter -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#fed7aa" flood-opacity="0.7" />
+    </filter>
+    
+    <!-- Dark mode shadow filter -->
+    <filter id="darkShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#7c2d12" flood-opacity="0.2" />
+    </filter>
+  </defs>
+  
+  <!-- Rounded rectangle background with shadow -->
+  <rect x="0" y="0" width="40" height="40" rx="10" ry="10" fill="url(#orangeGradient)" filter="url(#shadow)" class="logo-bg" />
+  
+  <!-- A+ text -->
+  <text x="20" y="25" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="white" text-anchor="middle">A+</text>
+</svg>

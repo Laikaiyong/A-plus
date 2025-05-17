@@ -104,65 +104,6 @@ class ImageGenerationResponse(BaseModel):
     storage_url: Optional[str] = None
     space_id: Optional[str] = None
 
-# Models for study plan creation
-class StudyFile(BaseModel):
-    file_name: str
-    file_url: str
-
-class StudyLink(BaseModel):
-    link_title: str
-    link_url: str
-
-class StudyTopic(BaseModel):
-    topic_name: str
-    topic_description: Optional[str] = None
-
-class StudySessionRequest(BaseModel):
-    study_session_title: str
-    study_date: str
-    study_duration: int  # in minutes
-    study_topics: List[StudyTopic]
-
-class CreateStudyPlanRequest(BaseModel):
-    study_plan_name: str
-    study_plan_description: str
-    files: List[StudyFile] = Field(default_factory=list)
-    links: List[StudyLink] = Field(default_factory=list)
-    study_session: StudySessionRequest
-
-class CreateStudyPlanResponse(BaseModel):
-    study_plan_id: int
-    message: str = "Study plan created successfully"
-
-# Models for study plan creation
-class StudyFile(BaseModel):
-    file_name: str
-    file_url: str
-
-class StudyLink(BaseModel):
-    link_title: str
-    link_url: str
-
-class StudyTopic(BaseModel):
-    topic_name: str
-    topic_description: Optional[str] = None
-
-class StudySessionRequest(BaseModel):
-    study_session_title: str
-    study_date: str
-    study_duration: int  # in minutes
-    study_topics: List[StudyTopic]
-
-class CreateStudyPlanRequest(BaseModel):
-    study_plan_name: str
-    study_plan_description: str
-    files: List[StudyFile] = Field(default_factory=list)
-    links: List[StudyLink] = Field(default_factory=list)
-    study_session: StudySessionRequest
-
-class CreateStudyPlanResponse(BaseModel):
-    study_plan_id: int
-    message: str = "Study plan created successfully"
 
 @app.get("/", tags=["root"])
 def read_root() -> Dict[str, str]:

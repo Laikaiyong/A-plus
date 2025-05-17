@@ -1,80 +1,80 @@
-// src/app/api/nlp/stt/route.ts
+// src/app/api/gen/text/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import Core from '@alicloud/pop-core';
-import { writeFileSync, readFileSync, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
-import path from 'path';
-import { exec } from 'child_process';
-
-interface TokenResponse {
-  Token: string;
-  ExpireTime: string;
-}
-
-async function getIsiToken(): Promise<string> {
-  const client = new Core({
-    accessKeyId: process.env.WK_ALI_ACCESS_KEY!,
-    accessKeySecret: process.env.WK_ALI_ACCESS_SECRET!,
-    endpoint: 'https://nls-meta.cn-shanghai.aliyuncs.com',
-    apiVersion: '2019-02-28',
-  });
-
-  const result = await client.request('CreateToken', {}, { method: 'POST' }) as TokenResponse;
-  return result.Token;
-}
-
-function convertWebmToPcm(inputPath: string, outputPath: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    exec(`ffmpeg -i "${inputPath}" -f s16le -acodec pcm_s16le -ar 16000 -ac 1 "${outputPath}"`, (error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  });
-}
+import crypto from 'crypto';
 
 export async function POST(req: NextRequest) {
+  const { prompt } = await req.json();
+
+  const params = {
+    AccessKeyId: process.env.WK_ALI_ACCESS_KEY!,
+    Action: 'GenerateText',
+    Version: '2023-04-01',
+    Format: 'JSON',
+    Timestamp: new Date().toISOString(),
+    SignatureMethod: 'HMAC-SHA1',
+    SignatureVersion: '1.0',
+    SignatureNonce: Date.now().toString(),
+    Prompt: prompt,
+    Model: 'qwen2.5-omni-7b',
+  };
+
+  const sortedKeys = Object.keys(params).sort();
+  const encode = (str: string) =>
+    encodeURIComponent(str)
+      .replace(/\+/g, '%20')
+      .replace(/\*/g, '%2A')
+      .replace(/%7E/g, '~');
+
+  const canonicalQuery = sortedKeys
+    .map((k) => `${encode(k)}=${encode(params[k as keyof typeof params])}`)
+    .join('&');
+
+  const stringToSign = `GET&%2F&${encode(canonicalQuery)}`;
+
+  const signature = crypto
+    .createHmac('sha1', process.env.WK_ALI_ACCESS_SECRET! + '&')
+    .update(stringToSign)
+    .digest('base64');
+
+  const queryString = new URLSearchParams({ ...params, Signature: signature }).toString();
+  const url = `https://nls-meta.cn-shanghai.aliyuncs.com/?${queryString}`; // adjust endpoint
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000); // 10 seconds
+
   try {
-    const token = await getIsiToken();
-    const audioBuffer = await req.arrayBuffer();
-
-    const inputPath = path.join(tmpdir(), `input-${Date.now()}.webm`);
-    const outputPath = path.join(tmpdir(), `output-${Date.now()}.pcm`);
-
-    writeFileSync(inputPath, Buffer.from(audioBuffer));
-    await convertWebmToPcm(inputPath, outputPath);
-
-    const pcmData = readFileSync(outputPath);
-    unlinkSync(inputPath);
-    unlinkSync(outputPath);
-
-    const aliyunUrl = `https://nls-gateway.cn-shanghai.aliyuncs.com/stream/v1/asr?appkey=${process.env.WK_ALI_APP_KEY}&format=pcm&sample_rate=16000&enable_punctuation_prediction=true`;
-
-    const aliyunResponse = await fetch(aliyunUrl, {
-      method: 'POST',
-      headers: {
-        'X-NLS-Token': token,
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': pcmData.byteLength.toString(),
-      },
-      body: pcmData,
-    });
-
-    const result = await aliyunResponse.json();
-    console.log(result);
-    return NextResponse.json(result);
-  } catch (err: unknown) {
-    if (err instanceof Error) {
-      console.error('Error sending audio:', err.message);
+    const res = await fetch(url, { signal: controller.signal });
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      const text = await res.text();
+      data = { message: typeof text === 'string' ? text : String(text) };
+    }
+    console.log('API response data:', data, typeof data);
+    // Try to serialize data to ensure it's safe
+    let safeData;
+    try {
+      safeData = JSON.parse(JSON.stringify(data));
+    } catch {
+      safeData = { error: 'Response not serializable', raw: String(data) };
+    }
+    if (!res.ok) {
       return NextResponse.json(
-        { error: 'Failed to transcribe audio: ' + err.message },
-        { status: 500 }
-      );
-    } else {
-      console.error('Unknown error:', err);
-      return NextResponse.json(
-        { error: 'Failed to transcribe audio.' },
+        {
+          error: 'API error',
+          status: res.status,
+          data: safeData
+        },
         { status: 500 }
       );
     }
+    return NextResponse.json(safeData);
+  } catch (error: unknown) {
+    const message =
+      error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: message }, { status: 500 });
+  } finally {
+    clearTimeout(timeout);
   }
 }

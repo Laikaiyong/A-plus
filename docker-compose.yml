@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: aplus-frontend
+    restart: always
+    ports:
+      - "80:3000"  # Map host port 80 to container port 3000
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://localhost:8090  # Use localhost since services are on same host
+    networks:
+      - aplus-network
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: aplus-backend
+    restart: always
+    ports:
+      - "8090:8090"  # Map host port 8090 to container port 8090
+    environment:
+      - PORT=8090
+      - ENVIRONMENT=production
+      # Add other environment variables needed by your backend
+    volumes:
+      - backend-data:/app/data  # For persistent storage if needed
+    networks:
+      - aplus-network
+
+networks:
+  aplus-network:
+    driver: bridge
+
+volumes:
+  backend-data:

@@ -185,7 +185,7 @@ export default function ChatPage() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordedChunks.current = [];
       
-      const mediaRecorder = new MediaRecorder(stream);
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       audioRef.current = mediaRecorder;
       
       mediaRecorder.ondataavailable = (e) => {
@@ -215,16 +215,30 @@ export default function ChatPage() {
     }
   };
   
-  const processAudioToText = (audioBlob: Blob) => {
-    // Simulate processing audio to text
+  const processAudioToText = async (audioBlob: Blob) => {
     setIsProcessing(true);
-    
-    // In a real app, you'd send this to a speech-to-text service
-    setTimeout(() => {
-      const transcribedText = "This is a simulated transcription of audio input. I'd like to understand how to solve quadratic equations.";
-      setInputText(transcribedText);
+
+    try {
+      const res = await fetch('/api/nlp/stt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'audio/webm' }, // Even though Alibaba prefers PCM, this is fine if transcoding is supported
+        body: audioBlob,
+      });
+
+      const data = await res.json();
+      console.log(data);
+      if (data && data.result) {
+        setInputText(data.result);
+      } else {
+        console.warn('Unexpected response:', data);
+        alert('Speech recognition failed.');
+      }
+    } catch (err) {
+      console.error('Error sending audio:', err);
+      alert('Failed to transcribe audio.');
+    } finally {
       setIsProcessing(false);
-    }, 1000);
+    }
   };
   
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

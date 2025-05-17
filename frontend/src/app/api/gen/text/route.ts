@@ -39,7 +39,27 @@ export async function POST(req: NextRequest) {
   const queryString = new URLSearchParams({ ...params, Signature: signature }).toString();
   const url = `https://nls-meta.cn-shanghai.aliyuncs.com/?${queryString}`; // adjust endpoint
 
-  const res = await fetch(url);
-  const data = await res.json();
-  return NextResponse.json(data);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000); // 10 seconds
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      data = await res.text();
+    }
+    if (!res.ok) {
+      return NextResponse.json(
+        { error: 'API error', status: res.status, data },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json(data);
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  } finally {
+    clearTimeout(timeout);
+  }
 }

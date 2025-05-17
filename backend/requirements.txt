@@ -33,6 +33,7 @@ numpy==2.2.5
 oss2==2.19.1
 packaging==25.0
 pillow==11.2.1
+psycopg2==2.9.10
 pycparser==2.22
 pycryptodome==3.22.0
 pydantic==2.11.4

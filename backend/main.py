@@ -18,6 +18,18 @@ import json
 import oss2
 from pydantic import BaseModel, Field
 
+import requests
+import base64
+import aiohttp
+import asyncio
+from bs4 import BeautifulSoup
+# Add Alibaba Cloud OCR imports
+from alibabacloud_ocr20191230.client import Client as OcrClient
+from alibabacloud_ocr20191230.models import RecognizePdfRequest
+from alibabacloud_tea_openapi import models as open_api_models
+from alibabacloud_tea_util import models as util_models
+from alibabacloud_tea_util.client import Client as UtilClient
+
 
 load_dotenv()
 
@@ -292,6 +304,89 @@ async def create_study_plan(study_plan: StudyPlanCreate):
             detail=f"Database error: {str(e)}"
         )
 
+async def extract_text_from_url(url: str) -> str:
+    """
+    Scrape text content from a URL
+    
+    Args:
+        url: The URL to scrape
+        
+    Returns:
+        The extracted text content
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=30) as response:
+                if response.status != 200:
+                    logger.warning(f"Failed to fetch URL {url}: HTTP {response.status}")
+                    return f"Failed to fetch content from {url}"
+                
+                html = await response.text()
+                
+                # Parse HTML with BeautifulSoup
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Remove script and style elements
+                for script_or_style in soup(["script", "style"]):
+                    script_or_style.decompose()
+                
+                # Get text content
+                text = soup.get_text(separator='\n')
+                
+                # Clean up text: remove multiple newlines and whitespace
+                lines = (line.strip() for line in text.splitlines())
+                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                text = '\n'.join(chunk for chunk in chunks if chunk)
+                
+                return text
+    except Exception as e:
+        logger.error(f"Error scraping URL {url}: {str(e)}")
+        return f"Error extracting content from {url}: {str(e)}"
+
+async def extract_text_from_pdf(file_path: str, ocr_client) -> str:
+    """
+    Extract text from a PDF file using Alibaba Cloud OCR
+    
+    Args:
+        file_path: Path to the PDF file
+        ocr_client: Alibaba Cloud OCR client
+        
+    Returns:
+        The extracted text content
+    """
+    try:
+        # Read the file and encode it as base64
+        with open(file_path, 'rb') as f:
+            file_content = f.read()
+        
+        # Encode the file content as base64
+        base64_content = base64.b64encode(file_content).decode('utf-8')
+        
+        # Create the OCR request
+        request = RecognizePdfRequest(
+            body=base64_content
+        )
+        
+        # Set runtime options
+        runtime = util_models.RuntimeOptions()
+        
+        # Call the OCR API
+        response = ocr_client.recognize_general_with_options(request, runtime)
+        
+        # Extract text from the response
+        if response.body and response.body.data and response.body.data.content:
+            return response.body.data.content
+        else:
+            logger.warning(f"No text content extracted from {file_path}")
+            return f"No text content extracted from {os.path.basename(file_path)}"
+    except Exception as e:
+        logger.error(f"Error extracting text from PDF {file_path}: {str(e)}")
+        return f"Error extracting text from {os.path.basename(file_path)}: {str(e)}"
+
 
 @app.post("/trigger-workflow", tags=["workflow"])
 async def trigger_workflow(
@@ -321,6 +416,9 @@ async def trigger_workflow(
             
         # Process the uploaded PDF files
         pdf_files = []
+        pdf_texts = {}  # Store extracted text from PDFs
+        pdf_oss_urls = {}  # Store OSS URLs for the extracted text
+        
         for file in files:
             # Check if the file is a PDF
             if file.content_type == "application/pdf" or file.filename.lower().endswith('.pdf'):
@@ -339,15 +437,80 @@ async def trigger_workflow(
                     f.write(content)
                 
                 # Store file information
-                pdf_files.append({
+                pdf_file_info = {
                     "original_filename": file.filename,
                     "saved_path": file_path,
                     "size": len(content),
                     "content_type": file.content_type
-                })
+                }
+                
+                # Extract text from PDF using OCR if OCR client is available
+                if hasattr(app.state, 'ocr_client') and app.state.ocr_client:
+                    try:
+                        extracted_text = await extract_text_from_pdf(file_path, app.state.ocr_client)
+                        pdf_file_info["extracted_text"] = extracted_text
+                        pdf_texts[file.filename] = extracted_text
+                        print("pdf extraction text: "+ extracted_text)
+                        
+                        # Store the extracted text in OSS
+                        if app.state.bucket:
+                            try:
+                                # Create a unique text filename for OSS
+                                text_filename = f"extracted_texts/{plan_id}/{uuid.uuid4()}_pdf_{file.filename}.txt"
+                                
+                                # Upload the extracted text to OSS
+                                app.state.bucket.put_object(text_filename, extracted_text)
+                                
+                                # Get the OSS URL
+                                oss_url = f"https://{ALIBABA_OSS_BUCKET}.{ALIBABA_OSS_ENDPOINT}/{text_filename}"
+                                pdf_file_info["oss_text_url"] = oss_url
+                                pdf_oss_urls[file.filename] = oss_url
+                                logger.info(f"PDF extracted text stored in OSS: {oss_url}")
+                            except Exception as oss_error:
+                                logger.error(f"Error storing PDF text in OSS: {str(oss_error)}")
+                                pdf_file_info["oss_error"] = str(oss_error)
+                        
+                    except Exception as ocr_error:
+                        logger.error(f"OCR processing error for {file.filename}: {str(ocr_error)}")
+                        pdf_file_info["ocr_error"] = str(ocr_error)
+                else:
+                    pdf_file_info["ocr_status"] = "OCR client not available"
+                
+                pdf_files.append(pdf_file_info)
                 
                 # Reset file pointer for potential future reads
                 await file.seek(0)
+        
+        # Process links and extract content
+        link_contents = {}
+        link_oss_urls = {}  # Store OSS URLs for the extracted text from links
+        
+        for url in links_list:
+            try:
+                extracted_text = await extract_text_from_url(url)
+                link_contents[url] = extracted_text
+                print("link extraction text: "+ extracted_text)
+                
+                # Store the extracted text in OSS
+                if app.state.bucket:
+                    try:
+                        # Create a URL-safe filename by encoding the URL
+                        encoded_url = base64.urlsafe_b64encode(url.encode()).decode()
+                        text_filename = f"extracted_texts/{plan_id}/{uuid.uuid4()}_url_{encoded_url}.txt"
+                        
+                        # Upload the extracted text to OSS
+                        app.state.bucket.put_object(text_filename, extracted_text)
+                        
+                        # Get the OSS URL
+                        oss_url = f"https://{ALIBABA_OSS_BUCKET}.{ALIBABA_OSS_ENDPOINT}/{text_filename}"
+                        link_oss_urls[url] = oss_url
+                        logger.info(f"URL extracted text stored in OSS: {oss_url}")
+                    except Exception as oss_error:
+                        logger.error(f"Error storing URL text in OSS: {str(oss_error)}")
+                
+            except Exception as url_error:
+                logger.error(f"Error processing URL {url}: {str(url_error)}")
+                link_contents[url] = f"Error: {str(url_error)}"
         
         # Log the workflow trigger
         logger.info(f"Workflow triggered for plan_id: {plan_id} with {len(links_list)} links and {len(pdf_files)} PDF files")
@@ -361,7 +524,11 @@ async def trigger_workflow(
             "data": {
                 "plan_id": plan_id,
                 "links": links_list,
-                "files": pdf_files
+                "link_contents": link_contents,
+                "link_oss_urls": link_oss_urls,
+                "files": pdf_files,
+                "pdf_texts": pdf_texts,
+                "pdf_oss_urls": pdf_oss_urls
             }
         }
         
@@ -371,6 +538,7 @@ async def trigger_workflow(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to trigger workflow: {str(e)}"
         )
+
 
 
 if __name__ == "__main__":

@@ -143,27 +143,83 @@ export default function CreateStudyPlan() {
   };
   
   // Handle form submission
-  const handleCreatePlan = () => {
-    // Basic validation
-    if (!planName.trim()) {
-      alert('Please enter a study plan name');
-      return;
-    }
+const handleCreatePlan = async () => {
+  // Basic validation
+  if (!planName.trim()) {
+    alert('Please enter a study plan name');
+    return;
+  }
+  
+  try {
+    // Prepare the data for the API
+    const planData = {
+      plan_name: planName,
+      plan_description: planDescription
+    };
     
-    // Logic to create a new study plan
-    console.log("Creating study plan:", {
-      name: planName,
-      description: planDescription,
-      resources,
-      sessions
+    // Call the API to create the study plan
+    const response = await fetch('/api/db/studyplan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(planData),
     });
     
-    // In a real app, you would submit this to your backend
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to create study plan');
+    }
+    
+    const studyPlanResponse = await response.json();
+    console.log("Study plan created:", studyPlanResponse);
+    
+    // If we have resources, we can trigger the workflow
+    if (resources.length > 0 && studyPlanResponse.plan && studyPlanResponse.plan.id) {
+      // Extract links and files
+      const links = resources
+        .filter(resource => resource.type === 'link')
+        .map(resource => resource.url);
+        
+      const files = resources
+        .filter(resource => resource.type === 'pdf' && resource.file)
+        .map(resource => resource.file as File);
+      
+      // Create form data for the workflow
+      const formData = new FormData();
+      formData.append('plan_id', studyPlanResponse.plan.id.toString());
+      formData.append('links', JSON.stringify(links));
+      
+      // Append each file to the form data
+      files.forEach(file => {
+        formData.append('files', file);
+      });
+      
+      // Trigger the workflow
+      const workflowResponse = await fetch('/api/db/workflow', {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!workflowResponse.ok) {
+        const errorData = await workflowResponse.json();
+        console.error("Workflow error:", errorData);
+      } else {
+        const workflowData = await workflowResponse.json();
+        console.log("Workflow triggered:", workflowData);
+      }
+    }
+    
     alert('Study plan created successfully!');
     
     // Redirect to plans page
-    // router.push('/plan');
-  };
+    window.location.href = '/plan';
+  } catch (error) {
+    console.error("Error creating study plan:", error);
+    alert(`Failed to create study plan: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+};
+
 
   return (
     <div className="max-w-5xl mx-auto p-6">

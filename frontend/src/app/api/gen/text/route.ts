@@ -1,45 +1,87 @@
 // src/app/api/gen/text/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
+import { NextRequest } from 'next/server';
+import OpenAI from "openai";
+
+export const runtime = 'edge'; // Enable streaming in Next.js API routes
 
 export async function POST(req: NextRequest) {
   const { prompt } = await req.json();
 
-  const params = {
-    AccessKeyId: process.env.WK_ALI_ACCESS_KEY!,
-    Action: 'GenerateText',
-    Version: '2023-04-01',
-    Format: 'JSON',
-    Timestamp: new Date().toISOString(),
-    SignatureMethod: 'HMAC-SHA1',
-    SignatureVersion: '1.0',
-    SignatureNonce: Date.now().toString(),
-    Prompt: prompt,
-    Model: 'qwen2.5-omni-7b',
+  const openai = new OpenAI({
+    apiKey: process.env.DASHSCOPE_API_KEY,
+    baseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+  });
+
+  const completion = await openai.chat.completions.create({
+    model: "qwen-plus",
+    messages: [
+      { role: "system", content: "You are a helpful virtual learning instructor that curates personalized study experience to individuals" },
+      { role: "user", content: prompt }
+    ],
+  });
+
+  console.log(JSON.stringify(completion))
+
+  const completionText = JSON.stringify(completion)
+
+  return new Response(completionText);
+}
+
+// Client-side code
+const handleSendMessage = async () => {
+  if (!inputText.trim()) return;
+
+  const newUserMessage = {
+    id: messages.length + 1,
+    sender: 'user',
+    text: inputText,
+    timestamp: new Date(),
   };
 
-  const sortedKeys = Object.keys(params).sort();
-  const encode = (str: string) =>
-    encodeURIComponent(str)
-      .replace(/\+/g, '%20')
-      .replace(/\*/g, '%2A')
-      .replace(/%7E/g, '~');
+  setMessages(prev => [
+    ...prev,
+    newUserMessage,
+    {
+      id: newUserMessage.id + 1,
+      sender: 'ai',
+      text: "…", // Optional: show loading
+      timestamp: new Date(),
+    }
+  ]);
+  setInputText("");
+  setIsProcessing(true);
 
-  const canonicalQuery = sortedKeys
-    .map((k) => `${encode(k)}=${encode(params[k as keyof typeof params])}`)
-    .join('&');
+  try {
+    const res = await fetch('/api/gen/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: inputText }),
+    });
 
-  const stringToSign = `GET&%2F&${encode(canonicalQuery)}`;
+    const data = await res.json();
+    // Extract the AI response from the JSON structure
+    const aiText =
+      data.choices?.[0]?.message?.content ||
+      data.choices?.[0]?.delta?.content ||
+      data.text ||
+      "Sorry, I couldn't generate a response.";
 
-  const signature = crypto
-    .createHmac('sha1', process.env.WK_ALI_ACCESS_SECRET! + '&')
-    .update(stringToSign)
-    .digest('base64');
-
-  const queryString = new URLSearchParams({ ...params, Signature: signature }).toString();
-  const url = `https://nls-meta.cn-shanghai.aliyuncs.com/?${queryString}`; // adjust endpoint
-
-  const res = await fetch(url);
-  const data = await res.json();
-  return NextResponse.json(data);
-}
+    setMessages(prev => [
+      ...prev.slice(0, -1),
+      {
+        ...prev[prev.length - 1],
+        text: aiText,
+      },
+    ]);
+  } catch (err: any) {
+    setMessages(prev => [
+      ...prev.slice(0, -1),
+      {
+        ...prev[prev.length - 1],
+        text: `Sorry, there was an error generating a response.${err?.message ? " " + err.message : ""}`,
+      },
+    ]);
+  } finally {
+    setIsProcessing(false);
+  }
+};

@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 function stripWavHeader(buffer: Buffer): Buffer {
+  // Remove the 44-byte WAV header to get raw PCM
   return buffer.subarray(44);
 }
 
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Failed to get token', data: tokenData }, { status: 500 });
     }
 
-    // 2. Read and strip WAV header
+    // 2. Read and strip WAV header to get PCM
     const arrayBuffer = await req.arrayBuffer();
     const wavBuffer = Buffer.from(arrayBuffer);
     const pcmBuffer = stripWavHeader(wavBuffer);

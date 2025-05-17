@@ -5,11 +5,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import { 
   LuSend, LuMic, LuMicOff, LuPaperclip, LuPlus, LuLoader,
   LuCalendar, LuBookOpen, LuArrowRight, LuX, LuBrainCircuit,
-  LuChevronRight, LuChevronLeft, LuSquareCheck, LuClock,
-  LuPanelLeft, LuChartBar, LuList, LuChevronDown, LuMoreHorizontal
+  LuSquareCheck, LuClock,
+  LuPanelLeft, LuChartBar, LuList, LuChevronDown
 } from "react-icons/lu";
 import Link from "next/link";
 import Image from "next/image";
+import Recorder from 'recorder-js';
 
 // Mock data for initial messages
 const initialMessages = [
@@ -94,7 +95,7 @@ export default function ChatPage() {
   const [inputText, setInputText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadedFiles, setUploadedFiles] = useState<any[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<unknown[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   
@@ -106,8 +107,6 @@ export default function ChatPage() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const audioRef = useRef<MediaRecorder | null>(null);
-  const recordedChunks = useRef<Blob[]>([]);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   
   // Auto-scroll to bottom of chat
@@ -180,66 +179,66 @@ export default function ChatPage() {
     }
   };
   
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      recordedChunks.current = [];
-      
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      audioRef.current = mediaRecorder;
-      
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          recordedChunks.current.push(e.data);
-        }
-      };
-      
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(recordedChunks.current, { type: 'audio/webm' });
-        processAudioToText(audioBlob);
-        stream.getTracks().forEach(track => track.stop());
-      };
-      
-      mediaRecorder.start();
-      setIsRecording(true);
-    } catch (err) {
-      console.error("Error accessing microphone:", err);
-      alert("Could not access microphone. Please check permissions.");
-    }
-  };
-  
-  const stopRecording = () => {
-    if (audioRef.current && isRecording) {
-      audioRef.current.stop();
-      setIsRecording(false);
-    }
-  };
-  
-  const processAudioToText = async (audioBlob: Blob) => {
-    setIsProcessing(true);
+interface RecorderJs {
+  init(stream: MediaStream): void;
+  start(): Promise<void>;
+  stop(): Promise<{ blob: Blob }>;
+  stream: MediaStream;
+}
 
-    try {
-      const res = await fetch('/api/nlp/stt', {
-        method: 'POST',
-        headers: { 'Content-Type': 'audio/webm' }, // Even though Alibaba prefers PCM, this is fine if transcoding is supported
-        body: audioBlob,
-      });
+const audioContextRef = useRef<AudioContext | null>(null);
+const recorderRef = useRef<RecorderJs | null>(null);
 
-      const data = await res.json();
-      console.log(data);
-      if (data && data.result) {
-        setInputText(data.result);
-      } else {
-        console.warn('Unexpected response:', data);
-        alert('Speech recognition failed.');
-      }
-    } catch (err) {
-      console.error('Error sending audio:', err);
-      alert('Failed to transcribe audio.');
-    } finally {
-      setIsProcessing(false);
+const startRecording = async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioContextRef.current = new (window.AudioContext || (window as unknown).webkitAudioContext)();
+    recorderRef.current = new Recorder(audioContextRef.current, { type: 'audio/wav' });
+
+    recorderRef.current.init(stream);
+    await recorderRef.current.start();
+    setIsRecording(true);
+  } catch (err) {
+    console.error("Error accessing microphone:", err);
+    alert("Could not access microphone. Please check permissions.");
+  }
+};
+
+const stopRecording = async () => {
+  if (recorderRef.current && isRecording) {
+    const { blob } = await recorderRef.current.stop();
+    setIsRecording(false);
+    processAudioToText(blob);
+    // Stop all tracks
+    recorderRef.current.stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+  }
+};
+
+const processAudioToText = async (audioBlob: Blob) => {
+  setIsProcessing(true);
+
+  try {
+    const res = await fetch('/api/nlp/stt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/wav' }, // Now sending WAV/PCM
+      body: audioBlob,
+    });
+
+    const data = await res.json();
+    console.log(data);
+    if (data && data.result) {
+      setInputText(data.result);
+    } else {
+      console.warn('Unexpected response:', data);
+      alert('Speech recognition failed.');
     }
-  };
+  } catch (err) {
+    console.error('Error sending audio:', err);
+    alert('Failed to transcribe audio.');
+  } finally {
+    setIsProcessing(false);
+  }
+};
   
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -266,7 +265,7 @@ export default function ChatPage() {
   };
   
   // Simple mock response generator
-  const generateAIResponse = (input: string, plan: any = null, task: any = null) => {
+  const generateAIResponse = (input: string, plan: unknown = null, task: unknown = null) => {
     const responses = [
       "Based on your study materials, I recommend focusing on these key concepts. Would you like me to create a study plan for this topic?",
       "I've analyzed your question. This relates to Chapter 4 in your Physics textbook. Here's a concise explanation: When solving quadratic equations, you can use the formula x = (-b ± √(b² - 4ac)) / 2a where ax² + bx + c = 0. This allows you to find the roots of any quadratic equation.",
@@ -500,7 +499,7 @@ export default function ChatPage() {
                     {/* Display uploaded files if any */}
                     {message.files && message.files.length > 0 && (
                       <div className="mt-3 space-y-2">
-                        {message.files.map((file: any, idx: number) => (
+                        {message.files.map((file: unknown, idx: number) => (
                           <div key={idx} className="flex items-center p-2 rounded-lg bg-black/10 dark:bg-white/10">
                             {file.type.startsWith('image/') ? (
                               <div className="w-10 h-10 rounded bg-white/20 overflow-hidden mr-2">
@@ -548,7 +547,7 @@ export default function ChatPage() {
                       <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
                         <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Referenced materials:</p>
                         <div className="space-y-2">
-                          {message.references.map((ref: any) => (
+                          {message.references.map((ref: unknown) => (
                             <Link href={`/plan/${ref.id}`} key={ref.id}>
                               <div className="flex items-center p-2 rounded-md bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 text-xs hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors">
                                 {ref.type === 'pdf' ? (
@@ -873,13 +872,13 @@ export default function ChatPage() {
                     <div className="w-6 h-6 rounded bg-green-100 dark:bg-green-900/30 flex items-center justify-center mr-2 text-green-600 dark:text-green-400">
                       <LuSquareCheck className="w-3 h-3" />
                     </div>
-                    <span>Complete "Algebra Basics" session</span>
+                    <span>Complete &quot;Algebra Basics&quot; session</span>
                   </div>
                   <div className="flex items-center text-xs text-gray-700 dark:text-gray-300">
                     <div className="w-6 h-6 rounded bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center mr-2 text-blue-600 dark:text-blue-400">
                       <LuBookOpen className="w-3 h-3" />
                     </div>
-                    <span>Review "Quadratic Formula" material</span>
+                    <span>Review &quot;Quadratic Formula&quot; material</span>
                   </div>
                   <div className="flex items-center text-xs text-gray-700 dark:text-gray-300">
                     <div className="w-6 h-6 rounded bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center mr-2 text-purple-600 dark:text-purple-400">

@@ -1,13 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { 
   LuLayoutDashboard, LuCalendarCheck, LuMessageSquare, 
-  LuChevronLeft, LuChevronRight, LuBookOpen, LuSettings,
-  LuLogOut, LuUser
+  LuChevronLeft, LuChevronRight, LuBookOpen, LuLogOut
 } from 'react-icons/lu';
 
 const sidebarItems = [

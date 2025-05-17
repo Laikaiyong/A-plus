@@ -163,7 +163,7 @@ export default function LearningMaterialsPage() {
               </div>
               <h3 className="text-lg font-medium text-gray-700 dark:text-gray-300">No materials found</h3>
               <p className="text-gray-500 dark:text-gray-400 mt-1 max-w-sm">
-                Try adjusting your search or filter to find what you're looking for
+                Try adjusting your search or filter to find what you&apos;re looking for
               </p>
             </div>
           )}

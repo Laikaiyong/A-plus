@@ -102,7 +102,8 @@ export async function GET(request: NextRequest) {
     if (filter) {
       try {
         filterObj = JSON.parse(filter);
-      } catch (parseError) {
+      } catch (parseError: unknown) {
+        console.log(parseError);
         return NextResponse.json({ error: 'Invalid filter format' }, { status: 400 });
       }
     }
@@ -148,7 +149,8 @@ export async function DELETE(request: NextRequest) {
     let filterObj;
     try {
       filterObj = JSON.parse(filter);
-    } catch (parseError) {
+    } catch (parseError: unknown) {
+        console.log(parseError);
       return NextResponse.json({ error: 'Invalid filter format' }, { status: 400 });
     }
     

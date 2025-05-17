@@ -8,9 +8,6 @@ import {
 } from "react-icons/lu";
 import Link from "next/link";
 
-// This line will be imported from your actual components
-// import { CalendarWidget, ContentPreview, ProgressTracker, StudySessionCard } from "../components/dashboard";
-
 const container = {
   hidden: { opacity: 0 },
   show: {
@@ -144,11 +141,10 @@ export default function DashboardPage() {
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
           <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center mb-6">
             <LuBookOpen className="mr-2 h-5 w-5 text-orange-500" />
-            Today's Sessions
+            Today&apos;s Sessions
           </h2>
           
           <div className="space-y-4">
-            {/* These would be your actual StudySessionCard components */}
             {[
               { title: "Linear Algebra", time: "9:00 - 10:30 AM", progress: 80 },
               { title: "Chemical Reactions", time: "1:00 - 2:30 PM", progress: 60 },

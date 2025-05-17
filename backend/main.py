@@ -1,5 +1,5 @@
 from typing import Union, Dict, Any, List
-from fastapi import FastAPI, HTTPException, status, Form, Body
+from fastapi import FastAPI, HTTPException, status, Form, Body, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from diffusers import FluxPipeline
@@ -13,6 +13,7 @@ import logging
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
+import json
 # Add Alibaba Cloud OSS imports
 import oss2
 from pydantic import BaseModel, Field
@@ -215,13 +216,22 @@ async def generate_image(prompt: str = Form(...),
         )
 
 
-@app.post("/create-study-plan", tags=["study-plan"], response_model=CreateStudyPlanResponse)
-async def create_study_plan(study_plan: CreateStudyPlanRequest = Body(...)):
+class StudyPlanCreate(BaseModel):
+    plan_name: str = Field(..., description="Name of the study plan")
+    plan_description: str = Field(None, description="Description of the study plan")
+
+class WorkflowTrigger(BaseModel):
+    plan_id: int = Field(..., description="ID of the study plan")
+    links: List[str] = Field(default=[], description="List of links for the workflow")
+    files: List[str] = Field(default=[], description="List of file paths for the workflow")
+
+@app.post("/create-study-plan", tags=["study-plan"])
+async def create_study_plan(study_plan: StudyPlanCreate):
     """
-    Create a new study plan with associated files, links, and study session.
+    Create a new study plan with name and description.
     
     Args:
-        study_plan: The study plan data including name, description, files, links, and study session details
+        study_plan: The study plan data including name and description
         
     Returns:
         The created study plan ID and success message
@@ -240,67 +250,27 @@ async def create_study_plan(study_plan: CreateStudyPlanRequest = Body(...)):
         app.state.db_conn.autocommit = False
         
         try:
-            # 1. Insert study plan and get the ID
+            # Insert the study plan into the plans table
             cursor.execute(
                 """
-                INSERT INTO study_plans (name, description, created_at, updated_at)
-                VALUES (%s, %s, NOW(), NOW())
-                RETURNING id
+                INSERT INTO public.plans (name, description)
+                VALUES (%s, %s)
+                RETURNING id, name, description, created_at, updated_at
                 """,
-                (study_plan.study_plan_name, study_plan.study_plan_description)
+                (study_plan.plan_name, study_plan.plan_description)
             )
-            study_plan_id = cursor.fetchone()['id']
             
-            # 2. Insert files if any
-            for file in study_plan.files:
-                cursor.execute(
-                    """
-                    INSERT INTO study_plan_files (study_plan_id, file_name, file_url, created_at, updated_at)
-                    VALUES (%s, %s, %s, NOW(), NOW())
-                    """,
-                    (study_plan_id, file.file_name, file.file_url)
-                )
-            
-            # 3. Insert links if any
-            for link in study_plan.links:
-                cursor.execute(
-                    """
-                    INSERT INTO study_plan_links (study_plan_id, link_title, link_url, created_at, updated_at)
-                    VALUES (%s, %s, %s, NOW(), NOW())
-                    """,
-                    (study_plan_id, link.link_title, link.link_url)
-                )
-            
-            # 4. Insert study session
-            cursor.execute(
-                """
-                INSERT INTO study_sessions (study_plan_id, title, session_date, duration_minutes, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, NOW(), NOW())
-                RETURNING id
-                """,
-                (
-                    study_plan_id, 
-                    study_plan.study_session.study_session_title,
-                    study_plan.study_session.study_date,
-                    study_plan.study_session.study_duration
-                )
-            )
-            study_session_id = cursor.fetchone()['id']
-            
-            # 5. Insert study topics
-            for topic in study_plan.study_session.study_topics:
-                cursor.execute(
-                    """
-                    INSERT INTO study_topics (study_session_id, name, description, created_at, updated_at)
-                    VALUES (%s, %s, %s, NOW(), NOW())
-                    """,
-                    (study_session_id, topic.topic_name, topic.topic_description or '')
-                )
+            # Get the created study plan
+            created_plan = cursor.fetchone()
             
             # Commit the transaction
             app.state.db_conn.commit()
             
-            return CreateStudyPlanResponse(study_plan_id=study_plan_id)
+            return {
+                "status": "success",
+                "message": "Study plan created successfully",
+                "plan": created_plan
+            }
             
         except Exception as e:
             # Rollback in case of error
@@ -320,6 +290,86 @@ async def create_study_plan(study_plan: CreateStudyPlanRequest = Body(...)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Database error: {str(e)}"
+        )
+
+
+@app.post("/trigger-workflow", tags=["workflow"])
+async def trigger_workflow(
+    plan_id: int = Form(...),
+    links: str = Form("[]"),  # JSON string of links
+    files: List[UploadFile] = File(...)
+):
+    """
+    Trigger a workflow with a plan ID, links, and PDF files.
+    
+    Args:
+        plan_id: ID of the study plan
+        links: JSON string containing a list of links
+        files: List of uploaded PDF files
+        
+    Returns:
+        Status of the workflow trigger operation
+    """
+    try:
+        # Parse the links JSON string to a Python list
+        try:
+            links_list = json.loads(links)
+            if not isinstance(links_list, list):
+                links_list = []
+        except json.JSONDecodeError:
+            links_list = []
+            
+        # Process the uploaded PDF files
+        pdf_files = []
+        for file in files:
+            # Check if the file is a PDF
+            if file.content_type == "application/pdf" or file.filename.lower().endswith('.pdf'):
+                # Read file content
+                content = await file.read()
+                
+                # Create a unique filename to avoid collisions
+                unique_filename = f"{uuid.uuid4()}_{file.filename}"
+                
+                # Create directory if it doesn't exist
+                os.makedirs("uploaded_pdfs", exist_ok=True)
+                
+                # Save the file to disk
+                file_path = f"uploaded_pdfs/{unique_filename}"
+                with open(file_path, "wb") as f:
+                    f.write(content)
+                
+                # Store file information
+                pdf_files.append({
+                    "original_filename": file.filename,
+                    "saved_path": file_path,
+                    "size": len(content),
+                    "content_type": file.content_type
+                })
+                
+                # Reset file pointer for potential future reads
+                await file.seek(0)
+        
+        # Log the workflow trigger
+        logger.info(f"Workflow triggered for plan_id: {plan_id} with {len(links_list)} links and {len(pdf_files)} PDF files")
+        
+        # Here you would typically queue or start your processing workflow
+        # For now, we'll just return the collected data
+        
+        return {
+            "status": "success",
+            "message": "Workflow triggered successfully",
+            "data": {
+                "plan_id": plan_id,
+                "links": links_list,
+                "files": pdf_files
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error triggering workflow: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger workflow: {str(e)}"
         )
 
 

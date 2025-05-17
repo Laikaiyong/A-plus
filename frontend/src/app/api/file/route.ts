@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
       status: 200, 
       headers 
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error getting file from OSS:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
       url: result.url,
       path: fullPath
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error uploading file to OSS:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -123,7 +123,7 @@ export async function PUT(request: NextRequest) {
       url: result.url,
       path: fullPath
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error updating file in OSS:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
@@ -153,7 +153,7 @@ export async function DELETE(request: NextRequest) {
       success: true, 
       message: 'File deleted successfully' 
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Error deleting file from OSS:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

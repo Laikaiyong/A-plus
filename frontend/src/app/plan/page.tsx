@@ -83,7 +83,7 @@ const PlanPage = () => {
     const daysInMonth = lastDay.getDate();
     
     // Generate array of day objects
-    let days = [];
+    const days = [];
     
     // Add empty cells for days before the first day of the month
     for (let i = 0; i < firstDayOfWeek; i++) {

@@ -1,13 +1,10 @@
 "use client";
 
 import React from "react";
-import { useTheme } from "next-themes";
 import { motion } from "framer-motion";
 import { LuBell, LuUser, LuSearch } from "react-icons/lu";
 
 const Header = () => {
-  const { theme, setTheme } = useTheme();
-
   const [isAuthenticated, setIsAuthenticated] = React.useState(false);
 
   return (

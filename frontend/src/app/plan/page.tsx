@@ -1,49 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { LuPlus, LuCalendarDays, LuList, LuFilter, LuMessageSquare, LuSearch, LuLayoutGrid } from 'react-icons/lu';
-
-// Mock data for study plans
-const studyPlans = [
-  {
-    id: 1,
-    title: "Advanced Calculus",
-    totalSessions: 12,
-    completedSessions: 5,
-    nextSession: "Today, 3:00 PM",
-    type: "math",
-    progress: 42
-  },
-  {
-    id: 2,
-    title: "Literature Analysis",
-    totalSessions: 8,
-    completedSessions: 6,
-    nextSession: "Tomorrow, 10:00 AM",
-    type: "literature",
-    progress: 75
-  },
-  {
-    id: 3,
-    title: "Physics Fundamentals",
-    totalSessions: 15,
-    completedSessions: 3,
-    nextSession: "May 19, 2:00 PM",
-    type: "science",
-    progress: 20
-  }
-];
-
-// Mock calendar event data
-const calendarEvents = [
-  { id: 1, title: "Calculus: Derivatives", date: new Date(2025, 4, 17, 15, 0), duration: 60, type: "math" },
-  { id: 2, title: "Hamlet Analysis", date: new Date(2025, 4, 18, 10, 0), duration: 90, type: "literature" },
-  { id: 3, title: "Newton's Laws", date: new Date(2025, 4, 19, 14, 0), duration: 45, type: "science" },
-  { id: 4, title: "Integration Methods", date: new Date(2025, 4, 20, 11, 0), duration: 60, type: "math" },
-  { id: 5, title: "Macbeth Discussion", date: new Date(2025, 4, 21, 13, 30), duration: 45, type: "literature" }
-];
+import { useAllData } from '../../hooks/useAllData';
 
 // Animation variants
 const container = {
@@ -62,9 +23,127 @@ const item = {
 };
 
 const PlanPage = () => {
+  const { data, loading, error } = useAllData();
   const [viewMode, setViewMode] = useState('calendar'); // 'calendar' or 'list'
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedPlanFilter, setSelectedPlanFilter] = useState(null);
+  
+  // Generate a consistent color based on plan ID
+  const getPlanColor = (planId) => {
+    // Predefined color palette for better UI
+    const colorPalette = [
+      { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-300', dot: 'bg-blue-500' },
+      { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-700 dark:text-purple-300', dot: 'bg-purple-500' },
+      { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-300', dot: 'bg-green-500' },
+      { bg: 'bg-pink-100 dark:bg-pink-900/30', text: 'text-pink-700 dark:text-pink-300', dot: 'bg-pink-500' },
+      { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-700 dark:text-yellow-300', dot: 'bg-yellow-500' },
+      { bg: 'bg-indigo-100 dark:bg-indigo-900/30', text: 'text-indigo-700 dark:text-indigo-300', dot: 'bg-indigo-500' },
+      { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-300', dot: 'bg-red-500' },
+      { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-700 dark:text-orange-300', dot: 'bg-orange-500' },
+    ];
+    
+    // Use the plan ID to select a color from the palette
+    return colorPalette[planId % colorPalette.length];
+  };
+  
+  // Convert tasks to calendar events
+  const tasksAsEvents = data?.tasks ? data.tasks.map(task => {
+    const taskDate = task.start_date && task.start_time ? 
+      new Date(`${task.start_date}T${task.start_time}`) : 
+      new Date();
+      
+    // Find the associated plan
+    const associatedPlan = data.plans.find(plan => plan.id === task.plan_id);
+    const planName = associatedPlan?.name || "Unnamed Plan";
+    
+    // Get color based on plan ID
+    const planColor = getPlanColor(task.plan_id);
+    
+    return {
+      id: task.id,
+      title: task.title,
+      date: taskDate,
+      duration: task.duration || 60,
+      planName: planName,
+      plan_id: task.plan_id,
+      status: task.status,
+      color: planColor
+    };
+  }) : [];
+  
+  // Filter events by selected plan if needed
+  const filteredEvents = selectedPlanFilter 
+    ? tasksAsEvents.filter(event => event.plan_id === selectedPlanFilter)
+    : tasksAsEvents;
+    
+  // Get plans with tasks count and progress calculations
+  const plansWithMetrics = data?.plans ? data.plans.map(plan => {
+    // Find tasks for this plan
+    const planTasks = data.tasks.filter(task => task.plan_id === plan.id);
+    const totalTasks = planTasks.length;
+    const completedTasks = planTasks.filter(task => task.status === 'completed').length;
+    
+    // Calculate progress
+    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    
+    // Find the next upcoming task
+    const upcomingTasks = planTasks
+      .filter(task => task.status !== 'completed' && task.status !== 'cancelled' && task.start_date)
+      .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime());
+    
+    const nextSession = upcomingTasks.length > 0 ? 
+      formatNextSession(upcomingTasks[0].start_date, upcomingTasks[0].start_time) :
+      "No upcoming sessions";
+    
+    // Get color for this plan
+    const color = getPlanColor(plan.id);
+    
+    return {
+      ...plan,
+      totalSessions: totalTasks,
+      completedSessions: completedTasks,
+      nextSession,
+      progress,
+      color
+    };
+  })
+  .filter(plan => plan.name.toLowerCase().includes(searchTerm.toLowerCase()))
+  : [];
+  
+  // Format next session date
+  function formatNextSession(dateStr, timeStr) {
+    if (!dateStr) return "Not scheduled";
+    
+    const date = new Date(dateStr);
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    if (date.toDateString() === today.toDateString()) {
+      return `Today, ${timeStr ? formatTimeDisplay(timeStr) : ''}`;
+    } else if (date.toDateString() === tomorrow.toDateString()) {
+      return `Tomorrow, ${timeStr ? formatTimeDisplay(timeStr) : ''}`;
+    } else {
+      return `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${timeStr ? formatTimeDisplay(timeStr) : ''}`;
+    }
+  }
+  
+  // Format time for display (convert "13:00:00" to "1:00 PM")
+  function formatTimeDisplay(timeStr) {
+    if (!timeStr) return '';
+    
+    try {
+      const [hours, minutes] = timeStr.split(':');
+      const hour = parseInt(hours);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const displayHour = hour % 12 || 12;
+      return `${displayHour}:${minutes} ${ampm}`;
+    } catch (e) {
+      return timeStr;
+    }
+  }
   
   // Generate calendar days
   const generateCalendarDays = () => {
@@ -108,7 +187,7 @@ const PlanPage = () => {
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   
   const getEventsForDay = (date) => {
-    return calendarEvents.filter(event => 
+    return filteredEvents.filter(event => 
       event.date.getDate() === date.getDate() &&
       event.date.getMonth() === date.getMonth() &&
       event.date.getFullYear() === date.getFullYear()
@@ -140,6 +219,18 @@ const PlanPage = () => {
            date.getFullYear() === selectedDate.getFullYear();
   };
 
+  if (loading) return (
+    <div className="flex justify-center items-center h-64">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-orange-500"></div>
+    </div>
+  );
+
+  if (error) return (
+    <div className="p-4 bg-red-100 text-red-800 rounded-lg">
+      Error loading data: {error}
+    </div>
+  );
+
   return (
     <motion.div
       variants={container}
@@ -160,6 +251,8 @@ const PlanPage = () => {
             <input
               type="text"
               placeholder="Search plans..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 pr-4 py-2 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
             />
           </div>
@@ -200,11 +293,20 @@ const PlanPage = () => {
         </div>
         
         <div className="flex items-center space-x-2">
+          {/* Plan filter dropdown */}
+          <select 
+            className="p-2 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600"
+            value={selectedPlanFilter || ''}
+            onChange={(e) => setSelectedPlanFilter(e.target.value ? parseInt(e.target.value) : null)}
+          >
+            <option value="">All Plans</option>
+            {data?.plans?.map(plan => (
+              <option key={plan.id} value={plan.id}>{plan.name}</option>
+            ))}
+          </select>
+          
           <button className="p-2 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600">
             <LuFilter className="h-5 w-5" />
-          </button>
-          <button className="p-2 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600">
-            <LuLayoutGrid className="h-5 w-5" />
           </button>
         </div>
       </motion.div>
@@ -264,17 +366,16 @@ const PlanPage = () => {
                   
                   <div className="space-y-1">
                     {hasEvents && eventsForDay.slice(0, 2).map(event => (
-                      <div 
-                        key={event.id}
-                        className={`
-                          text-xs p-1 rounded-md truncate
-                          ${event.type === 'math' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 
-                            event.type === 'literature' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' : 
-                            'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'}
-                        `}
-                      >
-                        {event.title}
-                      </div>
+                      <Link href={`/plan/${event.plan_id}`} key={event.id}>
+                        <div 
+                          className={`
+                            text-xs p-1 rounded-md truncate cursor-pointer
+                            ${event.color.bg} ${event.color.text}
+                          `}
+                        >
+                          {event.title}
+                        </div>
+                      </Link>
                     ))}
                     
                     {eventsForDay.length > 2 && (
@@ -290,56 +391,65 @@ const PlanPage = () => {
         </motion.div>
       ) : (
         <motion.div variants={item} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700">
-          {studyPlans.map(plan => (
-            <div key={plan.id} className="p-5 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
-              <div className="flex justify-between items-center">
-                <div className="flex-1">
-                  <Link href={`/plan/${plan.id}`} className="block">
-                    <h3 className="text-lg font-semibold text-gray-800 dark:text-white hover:text-orange-500 dark:hover:text-orange-400 transition-colors">{plan.title}</h3>
-                  </Link>
-                  <div className="flex items-center mt-2 text-sm text-gray-600 dark:text-gray-400">
-                    <span>Next session: <span className="font-medium text-gray-800 dark:text-gray-200">{plan.nextSession}</span></span>
-                    <span className="mx-2">•</span>
-                    <span>{plan.completedSessions} of {plan.totalSessions} sessions completed</span>
-                  </div>
-                </div>
-                
-                <div className="flex items-center space-x-4">
-                  <div className="flex items-center">
-                    <div className="relative h-9 w-9">
-                      <svg className="w-full h-full" viewBox="0 0 36 36">
-                        <circle cx="18" cy="18" r="16" fill="none" strokeWidth="3" stroke="#E5E7EB" className="dark:stroke-gray-700" />
-                        <circle
-                          cx="18" cy="18" r="16"
-                          fill="none" strokeWidth="3"
-                          stroke="#FF6900"
-                          strokeDasharray={`${plan.progress} ${100 - plan.progress}`}
-                          strokeDashoffset="25"
-                          strokeLinecap="round"
-                        />
-                      </svg>
-                      <div className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-700 dark:text-gray-300">
-                        {plan.progress}%
-                      </div>
+          {plansWithMetrics.length > 0 ? (
+            plansWithMetrics.map(plan => (
+              <div key={plan.id} className="p-5 hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors">
+                <div className="flex justify-between items-center">
+                  <div className="flex-1">
+                    <Link href={`/plan/${plan.id}`} className="block">
+                      <h3 className="text-lg font-semibold text-gray-800 dark:text-white hover:text-orange-500 dark:hover:text-orange-400 transition-colors">{plan.name}</h3>
+                    </Link>
+                    <div className="flex items-center mt-2 text-sm text-gray-600 dark:text-gray-400">
+                      <span>Next session: <span className="font-medium text-gray-800 dark:text-gray-200">{plan.nextSession}</span></span>
+                      <span className="mx-2">•</span>
+                      <span>{plan.completedSessions} of {plan.totalSessions} sessions completed</span>
                     </div>
                   </div>
                   
-                  <Link href={`/chat?planId=${plan.id}`}>
-                    <button className="p-2 text-gray-500 dark:text-gray-400 hover:text-orange-500 dark:hover:text-orange-400 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
-                      <LuMessageSquare className="h-5 w-5" />
-                    </button>
-                  </Link>
+                  <div className="flex items-center space-x-4">
+                    <div className="flex items-center">
+                      <div className="relative h-9 w-9">
+                        <svg className="w-full h-full" viewBox="0 0 36 36">
+                          <circle cx="18" cy="18" r="16" fill="none" strokeWidth="3" stroke="#E5E7EB" className="dark:stroke-gray-700" />
+                          <circle
+                            cx="18" cy="18" r="16"
+                            fill="none" strokeWidth="3"
+                            stroke="#FF6900"
+                            strokeDasharray={`${plan.progress} ${100 - plan.progress}`}
+                            strokeDashoffset="25"
+                            strokeLinecap="round"
+                          />
+                        </svg>
+                        <div className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-700 dark:text-gray-300">
+                          {plan.progress}%
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <Link href={`/chat?planId=${plan.id}`}>
+                      <button className="p-2 text-gray-500 dark:text-gray-400 hover:text-orange-500 dark:hover:text-orange-400 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+                        <LuMessageSquare className="h-5 w-5" />
+                      </button>
+                    </Link>
+                  </div>
+                </div>
+                
+                <div className="mt-3 bg-gray-100 dark:bg-gray-700 h-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-orange-400 to-orange-600 rounded-full transition-all duration-500"
+                    style={{ width: `${plan.progress}%` }}
+                  />
                 </div>
               </div>
-              
-              <div className="mt-3 bg-gray-100 dark:bg-gray-700 h-1.5 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-orange-400 to-orange-600 rounded-full transition-all duration-500"
-                  style={{ width: `${plan.progress}%` }}
-                />
-              </div>
+            ))
+          ) : (
+            <div className="p-6 text-center">
+              <p className="text-gray-500 dark:text-gray-400">No plans found matching your criteria.</p>
+              <Link href="/plan/create" className="mt-4 inline-flex items-center px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors">
+                Create a Plan
+              </Link>
             </div>
-          ))}
+          )}
         </motion.div>
       )}
       
@@ -354,26 +464,28 @@ const PlanPage = () => {
           
           <div className="space-y-3">
             {getEventsForDay(selectedDate).map(event => (
-              <div 
-                key={event.id}
-                className="p-4 border border-gray-100 dark:border-gray-700 rounded-lg hover:shadow-md transition-all flex justify-between items-center"
-              >
-                <div>
-                  <h4 className="font-semibold text-gray-800 dark:text-white">{event.title}</h4>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    {event.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {event.duration} min
-                  </p>
+              <Link href={`/plan/${event.plan_id}`} key={event.id}>
+                <div 
+                  className="p-4 border border-gray-100 dark:border-gray-700 rounded-lg hover:shadow-md transition-all flex justify-between items-center"
+                >
+                  <div>
+                    <h4 className="font-semibold text-gray-800 dark:text-white">{event.title}</h4>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {event.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {event.duration} min
+                    </p>
+                  </div>
+                  
+                  <div className="flex items-center">
+                    <span className={`
+                      inline-block w-3 h-3 rounded-full mr-2
+                      ${event.color.dot}
+                    `} />
+                    <span className="text-sm text-gray-600 dark:text-gray-400">
+                      {event.planName}
+                    </span>
+                  </div>
                 </div>
-                
-                <div className="flex items-center">
-                  <span className={`
-                    inline-block w-3 h-3 rounded-full mr-2
-                    ${event.type === 'math' ? 'bg-blue-500' : 
-                      event.type === 'literature' ? 'bg-purple-500' : 'bg-green-500'}
-                  `} />
-                  <span className="text-sm text-gray-600 dark:text-gray-400 capitalize">{event.type}</span>
-                </div>
-              </div>
+              </Link>
             ))}
           </div>
         </motion.div>

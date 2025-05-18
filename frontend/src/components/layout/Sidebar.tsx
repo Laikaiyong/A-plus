@@ -22,7 +22,7 @@ const Sidebar = () => {
 
   return (
     <motion.div
-      className={`sticky top-0 flex flex-col bg-white dark:bg-gray-900 shadow-lg transition-all duration-300 h-screen ${
+      className={`sticky left-0 flex flex-col bg-white dark:bg-gray-900 shadow-lg transition-all duration-300 ${
         collapsed ? 'w-20' : 'w-64'
       }`}
       initial={{ x: -60, opacity: 0 }}

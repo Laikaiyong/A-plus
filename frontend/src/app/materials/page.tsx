@@ -4,11 +4,13 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   LuSearch, LuFilter, LuPlus, LuFileText, LuUpload, 
-  LuLink, LuBook, LuBookmark, LuCircleCheck, LuX
+  LuLink, LuBook, LuBookmark, LuCircleCheck, LuX,
+  LuCalendar, LuSquareCheck
 } from 'react-icons/lu';
+import { useAllData } from '../../hooks/useAllData'; // Import the custom hook
 
 // Material type definitions
-type MaterialSource = 'ai' | 'uploaded' | 'website' | 'resource';
+type MaterialSource = 'ai' | 'uploaded' | 'website' | 'resource' | 'document' | 'task';
 
 interface Material {
   id: string;
@@ -20,6 +22,7 @@ interface Material {
   url?: string;
   completed: boolean;
   tags: string[];
+  planId?: number;
 }
 
 export default function LearningMaterialsPage() {
@@ -28,15 +31,51 @@ export default function LearningMaterialsPage() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  
+  // Fetch data using the custom hook
+  const { data, loading, error } = useAllData();
 
-  // Mock data loading
+  // Process data when it's loaded
   useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      setMaterials(mockMaterials);
+    if (data) {
+      // Transform documents to materials
+      const documentMaterials = data.documents.map(doc => ({
+        id: `doc-${doc.id}`,
+        title: doc.title,
+        description: doc.summary || doc.content?.substring(0, 150) || 'No description available',
+        type: (doc.type?.toLowerCase() === 'ai' ? 'ai' : 
+               doc.type?.toLowerCase() === 'website' ? 'website' : 
+               doc.type?.toLowerCase() === 'resource' ? 'resource' : 'document') as MaterialSource,
+        dateAdded: doc.created_at,
+        thumbnail: doc.image || undefined,
+        url: doc.metadata?.url || undefined,
+        completed: false,
+        tags: [doc.tag || 'Document'].filter(Boolean),
+        planId: doc.plan_id
+      }));
+
+      // Transform tasks to materials
+      // const taskMaterials = data.tasks.map(task => ({
+      //   id: `task-${task.id}`,
+      //   title: task.title,
+      //   description: `${task.start_date ? `Date: ${task.start_date}` : ''} ${task.start_time ? `Time: ${task.start_time}` : ''} ${task.duration ? `Duration: ${task.duration} min` : ''}`,
+      //   type: 'task' as MaterialSource,
+      //   dateAdded: task.created_at,
+      //   completed: task.status === 'completed',
+      //   tags: [task.status, `Plan ID: ${task.plan_id}`],
+      //   planId: task.plan_id
+      // }));
+
+      // Combine with mock data and set materials
+      setMaterials([...documentMaterials, ...mockMaterials]);
       setIsLoading(false);
-    }, 800);
-  }, []);
+    }
+  }, [data]);
+
+  // Set loading state based on the hook's loading state
+  useEffect(() => {
+    setIsLoading(loading);
+  }, [loading]);
 
   const filteredMaterials = materials.filter(material => {
     const matchesSearch = material.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -53,6 +92,18 @@ export default function LearningMaterialsPage() {
       material.id === id ? {...material, completed: !material.completed} : material
     ));
   };
+
+  // Error handling
+  if (error) {
+    return (
+      <div className="p-6 max-w-7xl mx-auto">
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded relative" role="alert">
+          <strong className="font-bold">Error:</strong>
+          <span className="block sm:inline"> Failed to load materials. Please try again later.</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -113,9 +164,10 @@ export default function LearningMaterialsPage() {
         {[
           { id: 'all', label: 'All Materials', icon: <LuBook /> },
           { id: 'ai', label: 'AI Generated', icon: <LuFileText /> },
+          { id: 'document', label: 'Documents', icon: <LuFileText /> },
           { id: 'uploaded', label: 'Uploaded', icon: <LuUpload /> },
           { id: 'website', label: 'Websites', icon: <LuLink /> },
-          { id: 'resource', label: 'Resources', icon: <LuBookmark /> }
+          { id: 'resource', label: 'Resources', icon: <LuBookmark /> },
         ].map((tab) => (
           <motion.button
             key={tab.id}
@@ -190,15 +242,22 @@ const MaterialCard = ({
     ai: <LuFileText className="w-4 h-4 text-blue-500" />,
     uploaded: <LuUpload className="w-4 h-4 text-green-500" />,
     website: <LuLink className="w-4 h-4 text-purple-500" />,
-    resource: <LuBookmark className="w-4 h-4 text-yellow-500" />
+    resource: <LuBookmark className="w-4 h-4 text-yellow-500" />,
+    document: <LuFileText className="w-4 h-4 text-indigo-500" />,
+    task: <LuSquareCheck className="w-4 h-4 text-red-500" />
   };
 
   const typeLabels = {
     ai: 'AI Generated',
     uploaded: 'Uploaded',
     website: 'Website',
-    resource: 'Resource'
+    resource: 'Resource',
+    document: 'Document',
+    task: 'Task'
   };
+
+  // Check if this is a database item or mock data
+  const isDbItem = material.id.startsWith('doc-') || material.id.startsWith('task-');
 
   return (
     <motion.div 
@@ -216,6 +275,11 @@ const MaterialCard = ({
           />
         </div>
       )}
+      {!material.thumbnail && material.type === 'task' && (
+        <div className="h-24 w-full bg-gradient-to-r from-red-50 to-red-100 dark:from-red-900/20 dark:to-red-800/20 flex items-center justify-center">
+          <LuCalendar className="w-12 h-12 text-red-400 dark:text-red-500" />
+        </div>
+      )}
       <div className="p-5 flex-grow">
         <div className="flex justify-between items-start mb-3">
           <div className="flex items-center">
@@ -223,6 +287,11 @@ const MaterialCard = ({
               {typeIcons[material.type]}
               <span className="ml-1">{typeLabels[material.type]}</span>
             </span>
+            {material.planId && (
+              <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+                Plan: {material.planId}
+              </span>
+            )}
           </div>
           <motion.button
             whileTap={{ scale: 0.9 }}
@@ -259,6 +328,11 @@ const MaterialCard = ({
             </span>
           ))}
         </div>
+        
+        {/* Added creation date */}
+        <div className="text-xs text-gray-500 dark:text-gray-400 mt-auto">
+          Added: {new Date(material.dateAdded).toLocaleDateString()}
+        </div>
       </div>
       
       <div className="flex items-stretch border-t border-gray-100 dark:border-gray-700 mt-auto">
@@ -274,6 +348,14 @@ const MaterialCard = ({
           >
             Open Link
           </a>
+        )}
+        {/* Different action for tasks */}
+        {material.type === 'task' && (
+          <button 
+            className="flex-1 p-3 text-center text-gray-600 dark:text-gray-300 font-medium"
+          >
+            Update Status
+          </button>
         )}
       </div>
     </motion.div>
@@ -344,6 +426,17 @@ const AddMaterialModal = ({ onClose }: { onClose: () => void }) => {
                 Add reference materials and resources
               </p>
             </button>
+            
+            {/* Added new option for tasks */}
+            <button className="border border-gray-200 dark:border-gray-700 p-6 rounded-xl flex flex-col items-center justify-center gap-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+              <div className="w-16 h-16 bg-red-100 dark:bg-red-900/30 rounded-full flex items-center justify-center">
+                <LuSquareCheck className="w-8 h-8 text-red-600 dark:text-red-400" />
+              </div>
+              <h3 className="font-medium text-gray-900 dark:text-white">Create Task</h3>
+              <p className="text-sm text-gray-500 dark:text-gray-400 text-center">
+                Add a new learning task with timeline
+              </p>
+            </button>
           </div>
         </div>
         
@@ -360,7 +453,7 @@ const AddMaterialModal = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
-// Mock data
+// Mock data preserved for fallback/testing
 const mockMaterials: Material[] = [
   {
     id: '1',

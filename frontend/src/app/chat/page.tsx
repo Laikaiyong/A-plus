@@ -22,7 +22,8 @@ import {
 import Link from "next/link";
 import Image from "next/image";
 import Recorder from "recorder-js";
-import { marked } from 'marked';
+import { marked } from "marked";
+import { useAllData } from "../../hooks/useAllData";
 
 // Mock data for initial messages
 const initialMessages = [
@@ -121,33 +122,261 @@ export default function ChatPage() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
-  function convertMarkdownToHtml(markdown: string): string {
-    if (!markdown) return '';
-    
-    // Configure marked options if needed
-    marked.setOptions({
-      breaks: true, // Convert line breaks to <br>
-      gfm: true,    // GitHub flavored markdown
-      sanitize: false, // Allow HTML
+  const [detectedTopics, setDetectedTopics] = useState<string[]>([]);
+  const [relevantFocusAreas, setRelevantFocusAreas] = useState<
+    { name: string; progress: number }[]
+  >([]);
+  const [recommendedSteps, setRecommendedSteps] = useState<
+    { icon: string; color: string; text: string }[]
+  >([]);
+
+  // Get real data using the hook
+  const { data, loading, error } = useAllData();
+
+  // Transform real data to match the existing expected format
+  const studyPlans = React.useMemo(() => {
+    if (!data?.plans || !data?.tasks) return mockStudyPlans;
+
+    return data.plans.map((plan) => {
+      // Find tasks for this plan
+      const planTasks = data.tasks.filter((task) => task.plan_id === plan.id);
+      const totalTasks = planTasks.length;
+      const completedTasks = planTasks.filter(
+        (task) => task.status === "completed"
+      ).length;
+
+      // Calculate progress
+      const progress =
+        totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+      // Find the next upcoming task
+      const upcomingTasks = planTasks
+        .filter(
+          (task) =>
+            task.status !== "completed" &&
+            task.status !== "cancelled" &&
+            task.start_date
+        )
+        .sort(
+          (a, b) =>
+            new Date(a.start_date).getTime() - new Date(b.start_date).getTime()
+        );
+
+      const nextSession =
+        upcomingTasks.length > 0
+          ? {
+              title: upcomingTasks[0].title,
+              date: new Date(upcomingTasks[0].start_date),
+              duration: upcomingTasks[0].duration || 60,
+            }
+          : {
+              title: "No upcoming session",
+              date: new Date(),
+              duration: 0,
+            };
+
+      return {
+        id: `plan-${plan.id}`,
+        title: plan.name,
+        progress,
+        totalSessions: totalTasks,
+        completedSessions: completedTasks,
+        nextSession,
+        topics: plan.tags ? plan.tags.split(",").map((tag) => tag.trim()) : [],
+      };
     });
-    
-    return marked.parse(markdown);
-  }
-  
-  // Auto-scroll to bottom of chat
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [data?.plans, data?.tasks]);
 
-  // Effect to set initial height (full screen)
-  useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.style.height = `calc(100vh - 180px)`;
+  const studyTasks = React.useMemo(() => {
+    if (!data?.tasks) return mockStudyTasks;
+
+    return data.tasks
+      .filter(
+        (task) => task.status !== "completed" && task.status !== "cancelled"
+      )
+      .slice(0, 5) // Limit to 5 upcoming tasks
+      .map((task) => ({
+        id: `task-${task.id}`,
+        title: task.title,
+        dueDate: new Date(task.start_date || Date.now()),
+        completed: task.status === "completed",
+        planId: `plan-${task.plan_id}`,
+      }));
+  }, [data?.tasks]);
+
+  // Function to analyze message content and update insights
+  const analyzeMessageContent = (message: string) => {
+    // Convert message to lowercase for easier matching
+    const lowerMessage = message.toLowerCase();
+
+    // Extract topics based on keyword matching and available plans/topics
+    const topics: string[] = [];
+
+    // Check for topics from user's actual study plans
+    studyPlans.forEach((plan) => {
+      // Check plan title
+      if (lowerMessage.includes(plan.title.toLowerCase())) {
+        topics.push(plan.title);
+      }
+
+      // Check plan topics/tags
+      plan.topics?.forEach((topic) => {
+        if (lowerMessage.includes(topic.toLowerCase())) {
+          topics.push(topic);
+        }
+      });
+    });
+
+    // Additional topic detection logic
+    if (
+      lowerMessage.includes("javascript") ||
+      lowerMessage.includes("js") ||
+      lowerMessage.includes("react") ||
+      lowerMessage.includes("node")
+    ) {
+      topics.push("JavaScript");
+      if (lowerMessage.includes("react")) topics.push("React");
+      if (lowerMessage.includes("node")) topics.push("Node.js");
     }
-  }, []);
 
+    if (
+      lowerMessage.includes("math") ||
+      lowerMessage.includes("algebra") ||
+      lowerMessage.includes("equation") ||
+      lowerMessage.includes("formula")
+    ) {
+      topics.push("Math");
+      if (lowerMessage.includes("quadratic"))
+        topics.push("Quadratic Equations");
+      if (lowerMessage.includes("algebra")) topics.push("Algebra");
+    }
+
+    if (
+      lowerMessage.includes("machine learning") ||
+      lowerMessage.includes("ai") ||
+      lowerMessage.includes("ml") ||
+      lowerMessage.includes("algorithm")
+    ) {
+      topics.push("Machine Learning");
+      if (lowerMessage.includes("neural")) topics.push("Neural Networks");
+    }
+
+    // If no specific topics detected, use general learning topics
+    if (topics.length === 0) {
+      topics.push("Learning Strategies", "Study Skills");
+    }
+
+    // Remove duplicates
+    const uniqueTopics = [...new Set(topics)];
+    setDetectedTopics(uniqueTopics);
+
+    // Generate focus areas based on detected topics
+    const focusAreas: { name: string; progress: number }[] = [];
+
+    // Use actual study plans for focus areas if available
+    studyPlans.forEach((plan) => {
+      if (
+        topics.includes(plan.title) ||
+        plan.topics?.some((topic) => topics.includes(topic))
+      ) {
+        focusAreas.push({
+          name: plan.title,
+          progress: plan.progress,
+        });
+      }
+    });
+
+    // Add some default areas if needed
+    if (
+      topics.includes("JavaScript") &&
+      !focusAreas.find((a) => a.name.includes("JavaScript"))
+    ) {
+      focusAreas.push({ name: "JavaScript", progress: 65 });
+    }
+    if (
+      topics.includes("Math") &&
+      !focusAreas.find((a) => a.name.includes("Math"))
+    ) {
+      focusAreas.push({ name: "Math", progress: 40 });
+    }
+    if (
+      (topics.includes("Machine Learning") || topics.includes("AI")) &&
+      !focusAreas.find((a) => a.name.includes("Machine Learning"))
+    ) {
+      focusAreas.push({ name: "Machine Learning", progress: 25 });
+    }
+
+    // Limit to top 3 focus areas
+    setRelevantFocusAreas(focusAreas.slice(0, 3));
+
+    // Generate recommended next steps based on detected topics and real plans/tasks
+    const recommendations: { icon: string; color: string; text: string }[] = [];
+
+    // Add recommendations based on upcoming tasks that match detected topics
+    studyTasks.forEach((task) => {
+      const relatedPlan = studyPlans.find((p) => p.id === task.planId);
+
+      if (
+        relatedPlan &&
+        (topics.includes(relatedPlan.title) ||
+          relatedPlan.topics?.some((topic) => topics.includes(topic)))
+      ) {
+        recommendations.push({
+          icon: "check",
+          color: "green",
+          text: `Complete "${task.title}" task`,
+        });
+      }
+    });
+
+    // Add general topic-based recommendations
+    if (uniqueTopics.includes("JavaScript") || uniqueTopics.includes("React")) {
+      recommendations.push({
+        icon: "book",
+        color: "blue",
+        text: "Review JavaScript fundamentals",
+      });
+    }
+
+    if (
+      uniqueTopics.includes("Math") ||
+      uniqueTopics.includes("Algebra") ||
+      uniqueTopics.includes("Quadratic Equations")
+    ) {
+      recommendations.push({
+        icon: "book",
+        color: "blue",
+        text: "Practice solving equations",
+      });
+    }
+
+    if (uniqueTopics.includes("Machine Learning")) {
+      recommendations.push({
+        icon: "calendar",
+        color: "purple",
+        text: "Schedule model training session",
+      });
+    }
+
+    // Add general recommendation if needed
+    if (recommendations.length < 2) {
+      recommendations.push({
+        icon: "calendar",
+        color: "purple",
+        text: "Schedule a study session for this topic",
+      });
+    }
+
+    // Limit to 3 recommendations
+    setRecommendedSteps(recommendations.slice(0, 3));
+  };
+
+  // Enhanced message sending function
   const handleSendMessage = async () => {
     if (!inputText.trim()) return;
+
+    // Analyze the message content to update insights
+    analyzeMessageContent(inputText);
 
     const newUserMessage = {
       id: messages.length + 1,
@@ -170,6 +399,7 @@ export default function ChatPage() {
     setInputText("");
     setIsProcessing(true);
 
+    // Rest of the existing handleSendMessage function
     try {
       const res = await fetch("/api/gen/text", {
         method: "POST",
@@ -218,6 +448,31 @@ export default function ChatPage() {
     }
   };
 
+  function convertMarkdownToHtml(markdown: string): string {
+    if (!markdown) return "";
+
+    // Configure marked options if needed
+    marked.setOptions({
+      breaks: true, // Convert line breaks to <br>
+      gfm: true, // GitHub flavored markdown
+      sanitize: false, // Allow HTML
+    });
+
+    return marked.parse(markdown);
+  }
+
+  // Auto-scroll to bottom of chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Effect to set initial height (full screen)
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.style.height = `calc(100vh - 180px)`;
+    }
+  }, []);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -232,9 +487,6 @@ export default function ChatPage() {
     stream: MediaStream;
   }
 
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
-  const [recorder, setRecorder] = useState<any>(null);
-
   // Then add this effect to initialize audio functionality only on the client side
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -242,34 +494,15 @@ export default function ChatPage() {
       const AudioContextClass =
         window.AudioContext || window.webkitAudioContext;
       const newAudioContext = new AudioContextClass();
-      setAudioContext(newAudioContext);
+      // setAudioContext(newAudioContext);
 
       // Initialize recorder
       const newRecorder = new Recorder(newAudioContext, {
         // Options here
       });
-      setRecorder(newRecorder);
+      // setRecorder(newRecorder);
     }
   }, []);
-
-  // Update the recording functions to use the state variables
-  const startRecording = async () => {
-    if (!recorder || !audioContext) return;
-
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    await recorder.init(stream);
-    recorder.start();
-    setIsRecording(true);
-  };
-
-  const stopRecording = async () => {
-    if (!recorder) return;
-
-    const { blob } = await recorder.stop();
-    setIsRecording(false);
-    processAudioToText(blob);
-    stream.getTracks().forEach((track) => track.stop());
-  };
 
   const processAudioToText = async (audioBlob: Blob) => {
     setIsProcessing(true);
@@ -321,41 +554,7 @@ export default function ChatPage() {
     setUploadedFiles((files) => files.filter((_, i) => i !== index));
   };
 
-  // Simple mock response generator
-  const generateAIResponse = (
-    input: string,
-    plan: unknown = null,
-    task: unknown = null
-  ) => {
-    const responses = [
-      "Based on your study materials, I recommend focusing on these key concepts. Would you like me to create a study plan for this topic?",
-      "I've analyzed your question. This relates to Chapter 4 in your Physics textbook. Here's a concise explanation: When solving quadratic equations, you can use the formula x = (-b ± √(b² - 4ac)) / 2a where ax² + bx + c = 0. This allows you to find the roots of any quadratic equation.",
-      "Great question! I've found some relevant information in your uploaded materials. The key takeaway is that quadratic equations can be solved by factoring, completing the square, or using the quadratic formula. Let me explain each method in detail...",
-      "According to your learning history, you might want to review the fundamentals before tackling this concept. Should I create a review session on algebraic manipulation?",
-      "I've identified this as a common exam topic. Based on your study patterns, I recommend scheduling a focused session on quadratic equations and their applications next week.",
-    ];
-
-    // If a plan or task was attached, generate a more specific response
-    if (plan) {
-      return `I see you're asking about your "${
-        plan.title
-      }" study plan. Your progress is at ${plan.progress}% with ${
-        plan.completedSessions
-      } completed sessions out of ${plan.totalSessions}. Your next session "${
-        plan.nextSession.title
-      }" is scheduled for ${plan.nextSession.date.toLocaleDateString()}. Would you like me to help you prepare for this session?`;
-    }
-
-    if (task) {
-      return `Regarding your study task "${
-        task.title
-      }" that's due on ${task.dueDate.toLocaleDateString()}: let me help you with that. This task is related to your ${
-        mockStudyPlans.find((p) => p.id === task.planId)?.title
-      } plan. What specific assistance do you need with this task?`;
-    }
-
-    return responses[Math.floor(Math.random() * responses.length)];
-  };
+  // Simple mock response generat
 
   // Animation variants
   const containerVariants = {
@@ -411,15 +610,6 @@ export default function ChatPage() {
             <LuPanelLeft className="mr-2 h-5 w-5" />
             Study Plans
           </motion.button>
-
-          <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-            <Link
-              href="/plan/create"
-              className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white font-medium rounded-lg shadow-md shadow-orange-200 dark:shadow-orange-900/20 hover:from-orange-600 hover:to-orange-700 transition-all">
-              <LuPlus className="mr-2 h-5 w-5" />
-              Create Plan From Chat
-            </Link>
-          </motion.div>
         </div>
       </div>
 
@@ -441,125 +631,139 @@ export default function ChatPage() {
                 </h3>
               </div>
 
-              {/* Plans List */}
+              {/* Plans List - Now uses the real data */}
               <div className="flex-grow overflow-y-auto p-3 space-y-3">
-                {mockStudyPlans.map((plan) => (
-                  <div
-                    key={plan.id}
-                    className={`p-3 rounded-xl border transition-all cursor-pointer ${
-                      selectedPlan === plan.id
-                        ? "border-orange-200 bg-orange-50 dark:border-orange-900/50 dark:bg-orange-900/20"
-                        : "border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750"
-                    }`}
-                    onClick={() => {
-                      setSelectedPlan(
-                        selectedPlan === plan.id ? null : plan.id
-                      );
-                      setSelectedTask(null);
-                    }}>
-                    <div className="flex justify-between items-start mb-2">
-                      <h4 className="font-medium text-gray-800 dark:text-white">
-                        {plan.title}
-                      </h4>
-                      <span className="text-xs px-2 py-1 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400">
-                        {plan.completedSessions}/{plan.totalSessions}
-                      </span>
-                    </div>
-
-                    <div className="w-full h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden mb-2">
-                      <div
-                        className="h-full bg-gradient-to-r from-orange-500 to-orange-600"
-                        style={{ width: `${plan.progress}%` }}
-                      />
-                    </div>
-
-                    <div className="flex items-center text-xs text-gray-500 dark:text-gray-400">
-                      <LuCalendar className="w-3.5 h-3.5 mr-1" />
-                      <span>Next: {plan.nextSession.title}</span>
-                    </div>
-
-                    {/* Attach button */}
-                    {selectedPlan === plan.id && (
-                      <button
-                        className="mt-2 w-full px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-xs font-medium rounded"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setInputText((prev) =>
-                            prev
-                              ? `${prev} (Regarding my "${plan.title}" study plan)`
-                              : `I need help with my "${plan.title}" study plan`
-                          );
-                        }}>
-                        Attach to Message
-                      </button>
-                    )}
+                {loading ? (
+                  <div className="flex items-center justify-center h-20">
+                    <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-orange-500"></div>
                   </div>
-                ))}
-
-                <h4 className="font-medium text-gray-700 dark:text-gray-300 text-sm mt-4 mb-2 px-1">
-                  Upcoming Tasks
-                </h4>
-
-                {mockStudyTasks.map((task) => (
-                  <div
-                    key={task.id}
-                    className={`p-3 rounded-xl border transition-all cursor-pointer ${
-                      selectedTask === task.id
-                        ? "border-orange-200 bg-orange-50 dark:border-orange-900/50 dark:bg-orange-900/20"
-                        : "border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750"
-                    }`}
-                    onClick={() => {
-                      setSelectedTask(
-                        selectedTask === task.id ? null : task.id
-                      );
-                      setSelectedPlan(null);
-                    }}>
-                    <div className="flex items-start mb-1">
+                ) : error ? (
+                  <div className="text-red-500 text-sm p-3">
+                    Error loading plans: {error}
+                  </div>
+                ) : (
+                  <>
+                    {studyPlans.map((plan) => (
                       <div
-                        className={`p-1 rounded ${
-                          task.completed
-                            ? "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"
-                            : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"
-                        }`}>
-                        {task.completed ? (
-                          <LuSquareCheck className="w-4 h-4" />
-                        ) : (
-                          <LuClock className="w-4 h-4" />
-                        )}
-                      </div>
-                      <div className="ml-2">
-                        <h4
-                          className={`font-medium ${
-                            task.completed
-                              ? "text-green-600 dark:text-green-400 line-through"
-                              : "text-gray-800 dark:text-white"
-                          }`}>
-                          {task.title}
-                        </h4>
+                        key={plan.id}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer ${
+                          selectedPlan === plan.id
+                            ? "border-orange-200 bg-orange-50 dark:border-orange-900/50 dark:bg-orange-900/20"
+                            : "border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750"
+                        }`}
+                        onClick={() => {
+                          setSelectedPlan(
+                            selectedPlan === plan.id ? null : plan.id
+                          );
+                          setSelectedTask(null);
+                        }}>
+                        <div className="flex justify-between items-start mb-2">
+                          <h4 className="font-medium text-gray-800 dark:text-white">
+                            {plan.title}
+                          </h4>
+                          <span className="text-xs px-2 py-1 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400">
+                            {plan.completedSessions}/{plan.totalSessions}
+                          </span>
+                        </div>
+
+                        <div className="w-full h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden mb-2">
+                          <div
+                            className="h-full bg-gradient-to-r from-orange-500 to-orange-600"
+                            style={{ width: `${plan.progress}%` }}
+                          />
+                        </div>
+
                         <div className="flex items-center text-xs text-gray-500 dark:text-gray-400">
                           <LuCalendar className="w-3.5 h-3.5 mr-1" />
-                          <span>Due: {task.dueDate.toLocaleDateString()}</span>
+                          <span>Next: {plan.nextSession.title}</span>
                         </div>
-                      </div>
-                    </div>
 
-                    {/* Attach button */}
-                    {selectedTask === task.id && (
-                      <button
-                        className="mt-2 w-full px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-xs font-medium rounded"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setInputText((prev) =>
-                            prev
-                              ? `${prev} (About my task: "${task.title}")`
-                              : `I need help with my task: "${task.title}"`
+                        {/* Attach button */}
+                        {selectedPlan === plan.id && (
+                          <button
+                            className="mt-2 w-full px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-xs font-medium rounded"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInputText((prev) =>
+                                prev
+                                  ? `${prev} (Regarding my "${plan.title}" study plan)`
+                                  : `I need help with my "${plan.title}" study plan`
+                              );
+                            }}>
+                            Attach to Message
+                          </button>
+                        )}
+                      </div>
+                    ))}
+
+                    <h4 className="font-medium text-gray-700 dark:text-gray-300 text-sm mt-4 mb-2 px-1">
+                      Upcoming Tasks
+                    </h4>
+
+                    {studyTasks.map((task) => (
+                      <div
+                        key={task.id}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer ${
+                          selectedTask === task.id
+                            ? "border-orange-200 bg-orange-50 dark:border-orange-900/50 dark:bg-orange-900/20"
+                            : "border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750"
+                        }`}
+                        onClick={() => {
+                          setSelectedTask(
+                            selectedTask === task.id ? null : task.id
                           );
+                          setSelectedPlan(null);
                         }}>
-                        Attach to Message
-                      </button>
-                    )}
-                  </div>
-                ))}
+                        <div className="flex items-start mb-1">
+                          <div
+                            className={`p-1 rounded ${
+                              task.completed
+                                ? "bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400"
+                                : "bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400"
+                            }`}>
+                            {task.completed ? (
+                              <LuSquareCheck className="w-4 h-4" />
+                            ) : (
+                              <LuClock className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="ml-2">
+                            <h4
+                              className={`font-medium ${
+                                task.completed
+                                  ? "text-green-600 dark:text-green-400 line-through"
+                                  : "text-gray-800 dark:text-white"
+                              }`}>
+                              {task.title}
+                            </h4>
+                            <div className="flex items-center text-xs text-gray-500 dark:text-gray-400">
+                              <LuCalendar className="w-3.5 h-3.5 mr-1" />
+                              <span>
+                                Due: {task.dueDate.toLocaleDateString()}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Attach button - same as before */}
+                        {selectedTask === task.id && (
+                          <button
+                            className="mt-2 w-full px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-xs font-medium rounded"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInputText((prev) =>
+                                prev
+                                  ? `${prev} (About my task: "${task.title}")`
+                                  : `I need help with my task: "${task.title}"`
+                              );
+                            }}>
+                            Attach to Message
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </>
+                )}
               </div>
             </motion.div>
           )}
@@ -588,9 +792,11 @@ export default function ChatPage() {
                         : "bg-white dark:bg-gray-750 border border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200"
                     }`}>
                     {message.sender === "ai" ? (
-                      <div 
+                      <div
                         className="text-sm md:text-base prose dark:prose-invert prose-sm max-w-none"
-                        dangerouslySetInnerHTML={{ __html: convertMarkdownToHtml(message.text) }}
+                        dangerouslySetInnerHTML={{
+                          __html: convertMarkdownToHtml(message.text),
+                        }}
                       />
                     ) : (
                       <div className="text-sm md:text-base">{message.text}</div>
@@ -948,18 +1154,19 @@ export default function ChatPage() {
                   Topics Detected
                 </h4>
                 <div className="flex flex-wrap gap-2">
-                  {[
-                    "Quadratic Equations",
-                    "Algebra",
-                    "Math Fundamentals",
-                    "Problem Solving",
-                  ].map((topic) => (
-                    <span
-                      key={topic}
-                      className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 text-xs rounded-full">
-                      {topic}
+                  {detectedTopics.length > 0 ? (
+                    detectedTopics.map((topic) => (
+                      <span
+                        key={topic}
+                        className="px-2 py-1 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 text-xs rounded-full">
+                        {topic}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Ask a question to see related topics
                     </span>
-                  ))}
+                  )}
                 </div>
               </div>
 
@@ -969,54 +1176,30 @@ export default function ChatPage() {
                   Current Focus Areas
                 </h4>
                 <div className="space-y-2">
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-gray-600 dark:text-gray-400">
-                        JavaScript
-                      </span>
-                      <span className="text-orange-600 dark:text-orange-400">
-                        65%
-                      </span>
-                    </div>
-                    <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-orange-500"
-                        style={{ width: "65%" }}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-gray-600 dark:text-gray-400">
-                        Math
-                      </span>
-                      <span className="text-orange-600 dark:text-orange-400">
-                        40%
-                      </span>
-                    </div>
-                    <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-orange-500"
-                        style={{ width: "40%" }}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-gray-600 dark:text-gray-400">
-                        Machine Learning
-                      </span>
-                      <span className="text-orange-600 dark:text-orange-400">
-                        25%
-                      </span>
-                    </div>
-                    <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-orange-500"
-                        style={{ width: "25%" }}
-                      />
-                    </div>
-                  </div>
+                  {relevantFocusAreas.length > 0 ? (
+                    relevantFocusAreas.map((area) => (
+                      <div key={area.name}>
+                        <div className="flex justify-between text-xs mb-1">
+                          <span className="text-gray-600 dark:text-gray-400">
+                            {area.name}
+                          </span>
+                          <span className="text-orange-600 dark:text-orange-400">
+                            {area.progress}%
+                          </span>
+                        </div>
+                        <div className="w-full h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-orange-500"
+                            style={{ width: `${area.progress}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Ask a question to see relevant focus areas
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1026,24 +1209,30 @@ export default function ChatPage() {
                   Recommended Next Steps
                 </h4>
                 <div className="space-y-2">
-                  <div className="flex items-center text-xs text-gray-700 dark:text-gray-300">
-                    <div className="w-6 h-6 rounded bg-green-100 dark:bg-green-900/30 flex items-center justify-center mr-2 text-green-600 dark:text-green-400">
-                      <LuSquareCheck className="w-3 h-3" />
+                  {recommendedSteps.map((step, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center text-xs text-gray-700 dark:text-gray-300">
+                      <div
+                        className={`w-6 h-6 rounded bg-${step.color}-100 dark:bg-${step.color}-900/30 flex items-center justify-center mr-2 text-${step.color}-600 dark:text-${step.color}-400`}>
+                        {step.icon === "check" && (
+                          <LuSquareCheck className="w-3 h-3" />
+                        )}
+                        {step.icon === "book" && (
+                          <LuBookOpen className="w-3 h-3" />
+                        )}
+                        {step.icon === "calendar" && (
+                          <LuCalendar className="w-3 h-3" />
+                        )}
+                      </div>
+                      <span>{step.text}</span>
                     </div>
-                    <span>Complete &quot;Algebra Basics&quot; session</span>
-                  </div>
-                  <div className="flex items-center text-xs text-gray-700 dark:text-gray-300">
-                    <div className="w-6 h-6 rounded bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center mr-2 text-blue-600 dark:text-blue-400">
-                      <LuBookOpen className="w-3 h-3" />
-                    </div>
-                    <span>Review &quot;Quadratic Formula&quot; material</span>
-                  </div>
-                  <div className="flex items-center text-xs text-gray-700 dark:text-gray-300">
-                    <div className="w-6 h-6 rounded bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center mr-2 text-purple-600 dark:text-purple-400">
-                      <LuCalendar className="w-3 h-3" />
-                    </div>
-                    <span>Schedule practice session</span>
-                  </div>
+                  ))}
+                  {recommendedSteps.length === 0 && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Ask a question to see recommendations
+                    </span>
+                  )}
                 </div>
               </div>
             </div>

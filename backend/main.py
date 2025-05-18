@@ -304,6 +304,59 @@ async def create_study_plan(study_plan: StudyPlanCreate):
             detail=f"Database error: {str(e)}"
         )
 
+@app.get("/get-all-data", tags=["data"])
+async def get_all_data():
+    """
+    Retrieve all data from plans, documents, and tasks tables.
+    
+    Returns:
+        A dictionary containing all data from the three tables
+    """
+    if not hasattr(app.state, 'db_conn') or app.state.db_conn is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection is not available"
+        )
+    
+    try:
+        # Create a cursor for database operations
+        cursor = app.state.db_conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get all plans
+        cursor.execute("SELECT * FROM public.plans")
+        plans = cursor.fetchall()
+        print(plans)
+        
+        # Get all documents
+        cursor.execute("SELECT * FROM public.documents")
+        documents = cursor.fetchall()
+        print(documents)
+        
+        # Get all tasks
+        cursor.execute("SELECT * FROM public.tasks")
+        tasks = cursor.fetchall()
+        print(tasks)
+        
+        # Close the cursor
+        cursor.close()
+        
+        # Return all data
+        return {
+            "status": "success",
+            "data": {
+                "plans": plans,
+                "documents": documents,
+                "tasks": tasks
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Database error when retrieving all data: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve data: {str(e)}"
+        )
+
 async def extract_text_from_url(url: str) -> str:
     """
     Scrape text content from a URL
